@@ -14,9 +14,6 @@ npm run dev          # http://localhost:3000
 npm run build        # build de produção (Vercel)
 npm run sim:headless # simula 3 dias sem renderização e imprime a curva de aprendizado
 ```
-
-Deploy na Vercel: importe o repositório — nenhuma configuração extra é necessária (`.npmrc` já define `legacy-peer-deps`).
-
 ## Arquitetura
 
 | Módulo | Responsabilidade |
