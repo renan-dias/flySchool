@@ -10,6 +10,7 @@ import type { FlyAgent } from "@/core/FlyAgent";
 import { PLATE_LETTERS } from "@/core/types";
 import { getEngine, useSimStore, useTick } from "@/store/useSimStore";
 import { GROUP_META, MODE_META, pct } from "./theme";
+import FullBrainPanel from "./FullBrainPanel";
 
 const GROUP_ORDER: NeuronGroup[] = ["visual", "chemo", "mechano", "state", "context", "cx", "action", "motor", "ppl1", "pam", "mbon", "apl", "kc"];
 
@@ -375,6 +376,7 @@ export default function BrainGraphModal() {
   const e = getEngine();
   const fly = e.flyById(selectedFlyId);
   if (!fly) return null;
+  if (fly.external) return <FullBrainPanel fly={fly} />;
   const b = fly.brain;
   const r = b.rate;
   const pam = 0.5 * (r[IDX.PAM] + r[IDX.PAM + 1]);

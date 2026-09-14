@@ -79,6 +79,20 @@ export default function TopBar() {
         </div>
       </div>
 
+      {e.brainMode === "flywire" && (
+        <div className="rounded-lg bg-fuchsia-400/15 px-2.5 py-1 text-[11px] leading-tight text-fuchsia-200" title="Conectoma FlyWire v783 completo em Web Workers">
+          <div className="font-semibold">🧠 FlyWire · 138.639 neurônios</div>
+          <div className="font-mono text-[10px] text-fuchsia-300/80">
+            {(() => {
+              const st = e.fullBrainStatus();
+              if (st.error) return `erro: ${st.error}`;
+              if (st.loading) return `carregando ${(st.progress * 100).toFixed(0)}%`;
+              return `${e.realtimeFactor.toFixed(2)}× tempo real`;
+            })()}
+          </div>
+        </div>
+      )}
+
       <div className="min-w-0 flex-1 truncate text-xs text-slate-300">
         <span className="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-teal-300" />
         {status}

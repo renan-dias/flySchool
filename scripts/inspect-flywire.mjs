@@ -1,0 +1,15 @@
+import { asyncBufferFromFile, parquetMetadataAsync, parquetReadObjects } from "hyparquet";
+import fs from "fs";
+import zlib from "zlib";
+const compressors = { BROTLI: (input, outputLength) => new Uint8Array(zlib.brotliDecompressSync(input)) };
+const file = await asyncBufferFromFile("data/flywire-raw/Connectivity_783.parquet");
+const meta = await parquetMetadataAsync(file);
+console.log("rows", meta.num_rows, "cols", meta.schema.map((s) => s.name));
+const rows = await parquetReadObjects({ file, rowStart: 0, rowEnd: 5, compressors });
+console.log(rows);
+const comp = fs.readFileSync("data/flywire-raw/Completeness_783.csv", "utf8").trim().split("\n").slice(1).map((l) => l.split(",")[0]);
+const ann = fs.readFileSync("data/flywire-raw/neuron_annotations.tsv", "utf8").trim().split("\n");
+const hdr = ann[0].split("\t");
+const ri = hdr.indexOf("root_id");
+const ids = new Set(ann.slice(1).map((l) => l.split("\t")[ri]));
+console.log("completeness", comp.length, "annotations", ids.size, "overlap", comp.filter((c) => ids.has(c)).length);

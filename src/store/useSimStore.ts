@@ -3,12 +3,15 @@
  * lido diretamente pelos componentes; o store só dispara re-renderizações periódicas.
  */
 import { create } from "zustand";
-import { SimulationEngine } from "@/core/SimulationEngine";
+import { SimulationEngine, type BrainMode } from "@/core/SimulationEngine";
+import { WorkerBrain } from "@/core/fullbrain/WorkerBrain";
+import type { FullBrainParams } from "@/core/fullbrain/types";
 
 let engine: SimulationEngine | null = null;
 export function getEngine(): SimulationEngine {
   if (!engine) {
     engine = new SimulationEngine(20260914, 18);
+    engine.externalBrainFactory = (seed, params) => new WorkerBrain(seed, params);
     // Acesso para pesquisadores via console do navegador: window.flyschool
     if (typeof window !== "undefined") (window as unknown as { flyschool: SimulationEngine }).flyschool = engine;
   }
@@ -35,6 +38,7 @@ interface SimState {
   toggleHelp: (v?: boolean) => void;
   setPopulation: (n: number) => void;
   reset: () => void;
+  setBrainMode: (mode: BrainMode, population: number, params?: Partial<FullBrainParams>) => void;
 }
 
 export const useSimStore = create<SimState>((set, get) => ({
@@ -68,6 +72,10 @@ export const useSimStore = create<SimState>((set, get) => ({
     e.setPopulation(n);
     const sel = get().selectedFlyId;
     set((s) => ({ populationVersion: s.populationVersion + 1, selectedFlyId: sel && e.flyById(sel) ? sel : null }));
+  },
+  setBrainMode: (mode, population, params) => {
+    getEngine().setBrainMode(mode, population, params);
+    set((s) => ({ populationVersion: s.populationVersion + 1, selectedFlyId: null }));
   },
   reset: () => {
     getEngine().reset();

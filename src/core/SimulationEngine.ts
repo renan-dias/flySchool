@@ -10,6 +10,10 @@ import { RNG } from "./rng";
 import { CLASSROOM } from "./SchoolLayout";
 import { SchoolDirector } from "./SchoolDirector";
 import type { CrisisKind, Problem, SimEvent, Subject, TeachingStrategy } from "./types";
+import { BALANCED_PARAMS, type ExternalBrain, type FullBrainParams } from "./fullbrain/types";
+
+export type BrainMode = "reduced" | "flywire";
+export const MAX_FLYWIRE_POPULATION = 4;
 
 export const TICK = 0.02;
 export const MAX_POPULATION = 40;
@@ -50,6 +54,16 @@ export class SimulationEngine {
   blackoutTimer = 0;
   pheromoneStormTimer = 0;
 
+  /** Motor neural das alunas: conectoma reduzido (96 neurônios) ou FlyWire completo (138.639). */
+  brainMode: BrainMode = "reduced";
+  fullBrainParams: FullBrainParams = { ...BALANCED_PARAMS };
+  /** Fábrica de cérebros FlyWire (injetada pela camada de navegador: Web Workers). */
+  externalBrainFactory: ((seed: number, params: FullBrainParams) => ExternalBrain) | null = null;
+  /** Razão tempo simulado / tempo real medida (modo FlyWire). */
+  realtimeFactor = 1;
+  private rtSim = 0;
+  private rtWall = 0;
+
   events: SimEvent[] = [];
   private eventId = 0;
   private accumulator = 0;
@@ -67,6 +81,8 @@ export class SimulationEngine {
       context: "entry",
       classroomStimulus: null,
       arenaStimulus: null,
+      classroomOdorKey: null,
+      arenaOdorKey: null,
       trialActive: false,
       trialRoom: null,
       trialId: -1,
@@ -108,6 +124,7 @@ export class SimulationEngine {
   /** Avança por um intervalo de tempo real (s), respeitando velocidade e pausa. */
   advance(realDt: number) {
     if (this.paused) return;
+    if (this.brainMode === "flywire") return this.advanceLockstep(realDt);
     this.accumulator += Math.min(realDt, 0.1) * this.speed;
     let guard = 0;
     while (this.accumulator >= TICK && guard++ < 60) {
@@ -115,6 +132,38 @@ export class SimulationEngine {
       this.accumulator -= TICK;
     }
     if (guard >= 60) this.accumulator = 0; // evita espiral de morte em máquinas lentas
+  }
+
+  /** Estado de carregamento dos cérebros FlyWire (0..1) e erro, se houver. */
+  fullBrainStatus(): { loading: boolean; progress: number; error: string | null; busy: number } {
+    const ext = this.students.map((s) => s.external).filter((x): x is ExternalBrain => !!x);
+    if (!ext.length) return { loading: false, progress: 1, error: null, busy: 0 };
+    return {
+      loading: ext.some((x) => !x.ready),
+      progress: ext.reduce((a, x) => a + x.progress, 0) / ext.length,
+      error: ext.find((x) => x.error)?.error ?? null,
+      busy: ext.filter((x) => x.busy).length,
+    };
+  }
+
+  /**
+   * Lockstep com os Web Workers: um tick de 20 ms só avança quando todos os cérebros
+   * devolveram o bloco anterior. A velocidade escolhida vira um teto; o limite real é o custo neural.
+   */
+  private advanceLockstep(realDt: number) {
+    const st = this.fullBrainStatus();
+    this.rtWall += Math.min(realDt, 0.25);
+    if (st.loading || st.error) return;
+    this.accumulator = Math.min(this.accumulator + Math.min(realDt, 0.1) * this.speed, TICK * 4);
+    if (st.busy === 0 && this.accumulator >= TICK) {
+      this.tick();
+      this.accumulator -= TICK;
+      this.rtSim += TICK;
+    }
+    if (this.rtWall > 1) {
+      this.realtimeFactor = this.realtimeFactor * 0.5 + (this.rtSim / this.rtWall) * 0.5;
+      this.rtSim = this.rtWall = 0;
+    }
   }
 
   tick() {
@@ -134,6 +183,8 @@ export class SimulationEngine {
     w.context = d.period.context;
     w.classroomStimulus = this.blackoutTimer > 0 ? null : d.classroomStimulus;
     w.arenaStimulus = this.blackoutTimer > 0 ? null : this.exam.stimulus;
+    w.classroomOdorKey = d.currentProblem ? this.problemIndex(d.currentProblem.id) : null;
+    w.arenaOdorKey = this.exam.current ? this.problemIndex(this.exam.current.id) : null;
     w.trialActive = examOn ? this.exam.active : d.trialActive;
     w.trialRoom = examOn ? "arena" : d.period.context === "class" ? "classroom" : null;
     w.trialId = examOn ? this.exam.trialId : d.trialId;
@@ -149,9 +200,10 @@ export class SimulationEngine {
 
   // ───────────────────────────── Controles ─────────────────────────────
   setPopulation(n: number) {
-    n = Math.max(1, Math.min(MAX_POPULATION, Math.round(n)));
+    n = Math.max(1, Math.min(this.brainMode === "flywire" ? MAX_FLYWIRE_POPULATION : MAX_POPULATION, Math.round(n)));
     const students = this.students;
     if (students.length > n) {
+      for (const f of students.slice(n)) f.external?.dispose();
       const remove = new Set(students.slice(n).map((f) => f.id));
       for (let i = this.flies.length - 1; i >= 0; i--) if (remove.has(this.flies[i].id)) this.flies.splice(i, 1);
     } else {
@@ -161,16 +213,16 @@ export class SimulationEngine {
         const seatBase = CLASSROOM.desks[(serial - 1) % CLASSROOM.desks.length];
         const slot = Math.floor((serial - 1) / CLASSROOM.desks.length);
         const seat = { x: seatBase.x + (slot % 2 ? 0.8 : -0.8) * (slot ? 1 : 0.4), z: seatBase.z + (slot > 1 ? 0.7 : 0) };
-        this.flies.push(
-          new FlyAgent({
-            id: `DM-${String(serial).padStart(2, "0")}`,
-            name: NICKNAMES[(serial - 1) % NICKNAMES.length],
-            role: "student",
-            seed: this.seed + serial * 1013,
-            seat,
-            color: COLORS[rng.int(COLORS.length)],
-          }),
-        );
+        const fly = new FlyAgent({
+          id: `DM-${String(serial).padStart(2, "0")}`,
+          name: NICKNAMES[(serial - 1) % NICKNAMES.length],
+          role: "student",
+          seed: this.seed + serial * 1013,
+          seat,
+          color: COLORS[rng.int(COLORS.length)],
+        });
+        if (this.brainMode === "flywire" && this.externalBrainFactory) fly.external = this.externalBrainFactory(this.seed + serial * 1013, this.fullBrainParams);
+        this.flies.push(fly);
       }
     }
   }
@@ -203,7 +255,25 @@ export class SimulationEngine {
     this.log("crisis", `⚠️ Crise injetada: ${CRISES[kind].label} — ${CRISES[kind].description}`);
   }
 
+  /** Troca o motor neural (reinicia a simulação). */
+  setBrainMode(mode: BrainMode, population: number, params?: Partial<FullBrainParams>) {
+    if (params) this.fullBrainParams = { ...this.fullBrainParams, ...params };
+    if (mode === "flywire" && !this.externalBrainFactory) throw new Error("Cérebro FlyWire indisponível neste ambiente");
+    this.brainMode = mode;
+    // rotina compacta: 1 minuto escolar = 1 s neural (o cérebro completo roda perto do tempo real)
+    this.director.secondsPerMinute = mode === "flywire" ? 1 : 2;
+    this.reset(population);
+    if (mode === "flywire")
+      this.log("info", `🧠 Modo FlyWire: ${this.students.length} aluna(s) com o conectoma completo (138.639 neurônios, 15,1 M conexões) em Web Workers.`);
+  }
+
+  setFullBrainParams(params: Partial<FullBrainParams>) {
+    this.fullBrainParams = { ...this.fullBrainParams, ...params };
+    for (const f of this.students) f.external?.setParams(params);
+  }
+
   reset(population = this.students.length || 18) {
+    for (const f of this.flies) f.external?.dispose();
     this.time = 0;
     this.accumulator = 0;
     this.heatTimer = this.blackoutTimer = this.pheromoneStormTimer = 0;
@@ -211,6 +281,16 @@ export class SimulationEngine {
     this.exam.reset();
     this.events = [];
     this.build(population);
+  }
+
+  /** Índice estável do problema (ordem de criação) — define o marcador odorífero no modo FlyWire. */
+  problemIndex(id: string): number {
+    let i = 0;
+    for (const k of this.problems.keys()) {
+      if (k === id) return i;
+      i++;
+    }
+    return 0;
   }
 
   problem(id: string): Problem {

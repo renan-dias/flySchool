@@ -1,0 +1,13 @@
+FlySchool — pacote do conectoma FlyWire (derivado)
+
+Dados de conectividade e anotações:
+  FlyWire Consortium. Whole-brain connectome v783 (CC-BY 4.0).
+  - Dorkenwald, S. et al. Neuronal wiring diagram of an adult brain. Nature 634, 124–138 (2024).
+  - Schlegel, P. et al. Whole-brain annotation and multi-connectome cell typing of Drosophila. Nature 634, 139–152 (2024).
+  - Anotações: github.com/flyconnectome/flywire_annotations (Supplemental_file1_neuron_annotations.tsv)
+
+Conectividade com sinal (excitatório/inibitório) e modelo LIF:
+  - Shiu, P. K. et al. A Drosophila computational brain model reveals sensorimotor processing. Nature 634, 210–219 (2024).
+  - Código e dados: github.com/philshiu/Drosophila_brain_model (MIT) — Connectivity_783.parquet, Completeness_783.csv
+
+Conversão: scripts/build-flywire.mjs (CSR delta-varint). Marcadores odoríferos: scripts/build-odor-codes.ts.

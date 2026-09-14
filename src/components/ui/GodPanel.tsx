@@ -5,7 +5,8 @@
  */
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { CRISES, MAX_POPULATION } from "@/core/SimulationEngine";
+import { CRISES, MAX_FLYWIRE_POPULATION, MAX_POPULATION, type BrainMode } from "@/core/SimulationEngine";
+import { BALANCED_PARAMS, SHIU_PARAMS, type FullBrainParams } from "@/core/fullbrain/types";
 import { SCHEDULE } from "@/core/SchoolDirector";
 import type { BoardVisual, CrisisKind, Problem, Reinforcement, Subject, TeachingStrategy } from "@/core/types";
 import { PLATE_LETTERS } from "@/core/types";
@@ -33,7 +34,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export default function GodPanel() {
   useTick();
   const e = getEngine();
-  const { toggleGod, setPopulation } = useSimStore();
+  const { toggleGod, setPopulation, setBrainMode } = useSimStore();
+  const [mode, setMode] = useState<BrainMode>(e.brainMode);
+  const [fwCount, setFwCount] = useState(Math.min(2, MAX_FLYWIRE_POPULATION));
+  const [fwParams, setFwParams] = useState<FullBrainParams>(e.fullBrainParams);
+  const cores = typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 4 : 4;
   const [pop, setPop] = useState(e.students.length);
   const [editor, setEditor] = useState(false);
   const [, force] = useState(0);
@@ -52,9 +57,105 @@ export default function GodPanel() {
         </button>
       </div>
       <div className="scroll-thin flex flex-col gap-3 overflow-y-auto p-3">
+        <Section title="Motor neural das alunas">
+          <div className="grid grid-cols-2 gap-1.5">
+            {(
+              [
+                ["reduced", "Conectoma reduzido", "96 neurônios LIF · até 40 moscas"],
+                ["flywire", "FlyWire completo", "138.639 neurônios · 1–4 moscas"],
+              ] as const
+            ).map(([k, l, d]) => (
+              <button
+                key={k}
+                onClick={() => setMode(k)}
+                className={`rounded-lg p-2 text-left text-xs ${mode === k ? "bg-fuchsia-400/20 ring-1 ring-fuchsia-300" : "bg-white/5"}`}
+              >
+                <div className="font-semibold text-white">{l}</div>
+                <div className="text-[10px] text-slate-400">{d}</div>
+              </button>
+            ))}
+          </div>
+          {mode === "flywire" && (
+            <div className="mt-2 space-y-1.5">
+              <label className="flex items-center justify-between text-[11px] text-slate-300">
+                Moscas com cérebro completo <span className="font-mono">{fwCount}</span>
+              </label>
+              <input type="range" min={1} max={MAX_FLYWIRE_POPULATION} value={fwCount} onChange={(ev) => setFwCount(+ev.target.value)} className="w-full" />
+              <p className="text-[10.5px] leading-snug text-slate-500">
+                Cada mosca roda os 15,1 M de conexões num Web Worker (~110 MB de RAM, 1 núcleo). Seu processador tem {cores} núcleos. Download único de 43 MB. A rotina escolar fica
+                compacta (1 min escolar = 1 s neural) e a velocidade passa a ser limitada pelo custo neural.
+              </p>
+              <div className="flex gap-1.5">
+                {(
+                  [
+                    ["Balanceado", BALANCED_PARAMS],
+                    ["Shiu et al. original", SHIU_PARAMS],
+                  ] as const
+                ).map(([l, p]) => (
+                  <button
+                    key={l}
+                    onClick={() => setFwParams({ ...p })}
+                    className={`flex-1 rounded-lg px-2 py-1 text-[11px] ${fwParams.inhibitoryGain === p.inhibitoryGain && fwParams.aplGraded === p.aplGraded ? "bg-white/15 text-white" : "bg-white/5 text-slate-400"}`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+              {(
+                [
+                  ["inhibitoryGain", "Ganho inibitório (balanço E/I)", 1, 8, 0.5, "×"],
+                  ["adaptIncrement", "Adaptação por disparo", 0, 4, 0.5, " mV"],
+                  ["aplGraded", "APL graduado sobre KCs", 0, 0.2, 0.01, " mV"],
+                  ["eta", "Taxa de aprendizado η", 0, 1, 0.05, ""],
+                ] as const
+              ).map(([k, l, min, max, step, unit]) => (
+                <div key={k}>
+                  <label className="flex items-center justify-between text-[11px] text-slate-400">
+                    {l}
+                    <span className="font-mono text-slate-300">
+                      {fwParams[k]}
+                      {unit}
+                    </span>
+                  </label>
+                  <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={fwParams[k]}
+                    onChange={(ev) => {
+                      const next = { ...fwParams, [k]: +ev.target.value };
+                      setFwParams(next);
+                      if (e.brainMode === "flywire") e.setFullBrainParams({ [k]: +ev.target.value });
+                    }}
+                    className="w-full"
+                  />
+                </div>
+              ))}
+              {fwParams.inhibitoryGain === 1 && fwParams.aplGraded === 0 && (
+                <p className="rounded bg-amber-400/10 px-2 py-1 text-[10.5px] text-amber-200">
+                  Parâmetros originais: estímulos olfativos fortes levam o cérebro a um estado de atividade global (≈80% das KCs), sem discriminação de estímulos.
+                </p>
+              )}
+            </div>
+          )}
+          <button
+            onClick={() => {
+              if (confirm("Trocar o motor neural reinicia a simulação (aprendizado e métricas são perdidos). Continuar?")) {
+                setBrainMode(mode, mode === "flywire" ? fwCount : Math.max(18, e.students.length), fwParams);
+                setPop(e.students.length);
+              }
+            }}
+            disabled={mode === e.brainMode && (mode === "reduced" || fwCount === e.students.length)}
+            className="mt-2 w-full rounded-lg bg-fuchsia-300 py-1.5 text-xs font-bold text-slate-900 disabled:opacity-30"
+          >
+            Aplicar motor neural (reinicia)
+          </button>
+        </Section>
+
         <Section title="População">
           <div className="flex items-center gap-3">
-            <input type="range" min={1} max={MAX_POPULATION} value={pop} onChange={(ev) => setPop(+ev.target.value)} className="flex-1" />
+            <input type="range" min={1} max={e.brainMode === "flywire" ? MAX_FLYWIRE_POPULATION : MAX_POPULATION} value={pop} onChange={(ev) => setPop(+ev.target.value)} className="flex-1" />
             <span className="w-8 text-right font-mono text-sm text-white">{pop}</span>
             <button
               onClick={() => setPopulation(pop)}
@@ -65,7 +166,9 @@ export default function GodPanel() {
             </button>
           </div>
           <p className="mt-1.5 text-[11px] text-slate-500">
-            Cada mosca executa um conectoma de 96 neurônios LIF · novas alunas chegam sem memória prévia.
+            {e.brainMode === "flywire"
+              ? "Modo FlyWire: cada aluna roda o conectoma completo (138.639 neurônios) · novas alunas chegam sem memória prévia."
+              : "Cada mosca executa um conectoma de 96 neurônios LIF · novas alunas chegam sem memória prévia."}
           </p>
         </Section>
 

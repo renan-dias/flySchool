@@ -45,6 +45,8 @@ export type TeachPhase = "idle" | "prepare" | "stimulus" | "iti";
 export class SchoolDirector {
   day = 1;
   minutes = DAY_START;
+  /** Segundos de tempo neural por minuto escolar. */
+  secondsPerMinute = SECONDS_PER_SCHOOL_MINUTE;
   periodIndex = 0;
 
   activeStrategy: Record<Subject, string> = { math: "math-sugar", language: "lang-symbolic" };
@@ -94,7 +96,7 @@ export class SchoolDirector {
 
   update(dt: number) {
     const e = this.engine;
-    this.minutes += dt / SECONDS_PER_SCHOOL_MINUTE;
+    this.minutes += dt / this.secondsPerMinute;
     this.strobeFlash = Math.max(0, this.strobeFlash - dt);
 
     // Transição de período → campainha

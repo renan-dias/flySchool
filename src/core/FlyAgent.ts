@@ -22,6 +22,8 @@ import {
   nearest,
 } from "./SchoolLayout";
 import type { ActionMode, Role, SchoolContext, Vec2 } from "./types";
+import { PoolDecoder } from "./fullbrain/PoolDecoder";
+import { EMPTY_INPUT, type ExternalBrain, type FullBrainInput } from "./fullbrain/types";
 
 export type RoomId = "classroom" | "arena" | "patio" | "bathroom" | "rest" | "hall";
 
@@ -31,6 +33,9 @@ export interface WorldView {
   context: SchoolContext;
   classroomStimulus: Uint8Array | null;
   arenaStimulus: Uint8Array | null;
+  /** Chave do marcador odorífero do problema na lousa (usada pelo cérebro FlyWire). */
+  classroomOdorKey: number | null;
+  arenaOdorKey: number | null;
   trialActive: boolean;
   trialRoom: "classroom" | "arena" | null;
   trialId: number;
@@ -114,6 +119,16 @@ export class FlyAgent {
   classTicks = 0;
   attendTicks = 0;
 
+  /**
+   * Cérebro FlyWire completo (138.639 neurônios) rodando num Web Worker. Quando presente,
+   * percepção, memória (KC→MBON), decisão, direção (PFL3→DNa02), alimentação (MN9) e fuga (Giant Fiber)
+   * são lidas dele; o conectoma reduzido deixa de ser integrado para esta mosca.
+   */
+  external: ExternalBrain | null = null;
+  readonly poolDecoder: PoolDecoder;
+  private extInput: FullBrainInput = { ...EMPTY_INPUT };
+  private trailSmell = 0;
+
   /** Alvo scriptado (professor). */
   scriptTarget: Vec2 | null = null;
 
@@ -142,6 +157,7 @@ export class FlyAgent {
             plasticity: Math.min(1.8, Math.max(0.25, lognorm(0.45))),
           };
     this.brain = new FlyConnectome(opts.seed, this.personality);
+    this.poolDecoder = new PoolDecoder(opts.seed, 2.5 * this.personality.curiosity);
     this.seat = opts.seat;
     this.waitSpot = {
       x: r.range(ARENA.waiting.minX, ARENA.waiting.maxX),
@@ -168,7 +184,24 @@ export class FlyAgent {
   }
 
   attention(): number {
+    if (this.external) {
+      // arbitragem homeostática: estados internos reduzem o ganho sensorial da lousa
+      const h = this.homeo;
+      return Math.max(
+        0.15,
+        Math.min(
+          1,
+          0.85 + 0.15 * (this.personality.focus - 1) - 1.3 * Math.max(0, h.hunger - 0.55) - Math.max(0, h.fatigue - 0.6) - 1.2 * Math.max(0, h.bladder - 0.6) - 0.8 * Math.max(0, h.thirst - 0.6),
+        ),
+      );
+    }
     return clamp01(this.brain.rate[IDX.CX_ATT] / 25);
+  }
+
+  /** Leitura motora da probóscide — DNg12 (reduzido) ou MN9 (FlyWire completo). */
+  private proboscisActive(threshold: number): boolean {
+    if (this.external) return (this.external.readout?.rates.mn9 ?? 0) > threshold * 0.4;
+    return this.brain.rate[IDX.DN_PROBOSCIS] > threshold;
   }
 
   // ─────────────────────────────── Tick ───────────────────────────────
@@ -176,6 +209,10 @@ export class FlyAgent {
     const b = this.brain;
     const pos = this.pos;
     const room = roomOf(pos);
+    if (this.external && this.role === "student") {
+      this.stepExternal(dt, w, room);
+      return;
+    }
     // 1) Transdução sensorial → correntes externas
     b.clearInputs();
     const att = this.attention();
@@ -257,6 +294,103 @@ export class FlyAgent {
     }
   }
 
+  /** Tick de uma mosca com cérebro FlyWire completo. */
+  private stepExternal(dt: number, w: WorldView, room: RoomId) {
+    const ext = this.external!;
+    const pos = this.pos;
+    const att = this.attention();
+    const q = (x: number, step = 5) => Math.round(x / step) * step;
+
+    let sugarContact = 0;
+    if (nearest(pos, SUGAR_SOURCES).d < 1.0) sugarContact = 1;
+    if (room === "classroom")
+      for (const plate of w.rewardPlates) if (dist(pos, CLASSROOM.plates[plate]) < PLATE_RADIUS + 0.2) sugarContact = w.rewardMagnitude;
+    const waterContact = nearest(pos, WATER_SOURCES).d < 1.0 ? 1 : 0;
+    let neighbors = 0;
+    for (const f of w.flies) if (f !== this && Math.abs(f.x - this.x) < 2.5 && Math.abs(f.z - this.z) < 2.5) neighbors++;
+    this.trailSmell = w.pheromoneTrail && w.trialActive && room === "classroom" && w.guidePlate >= 0 ? 1 : 0;
+
+    const dx = this.target.x - this.x;
+    const dz = this.target.z - this.z;
+    const d = Math.hypot(dx, dz);
+    const err = wrapAngle(Math.atan2(dz, dx) - this.heading);
+
+    // 1) Transdução → taxas de Poisson nos neurônios sensoriais reais
+    const stim = room === "classroom" ? w.classroomStimulus : room === "arena" ? w.arenaStimulus : null;
+    const key = room === "classroom" ? w.classroomOdorKey : room === "arena" ? w.arenaOdorKey : null;
+    const inp = this.extInput;
+    inp.odorKey = stim ? key : null;
+    inp.odorHz = stim ? q(60 * att) : 0;
+    inp.retina = stim ? Array.from(stim).flatMap((bit, i) => (bit ? [i] : [])) : null;
+    inp.retinaHz = stim ? q(6 * att, 2) : 0;
+    const puff = this.airPuffTimer > 0;
+    const strobe = this.strobeTimer > 0;
+    inp.sugarHz = sugarContact > 0 ? 120 : 0;
+    inp.pamHz = q(40 * sugarContact + 10 * waterContact);
+    inp.ppl1Hz = q((puff ? 40 : 0) + (strobe ? 20 : 0) + w.heat * 15);
+    inp.windHz = puff ? 40 : 0;
+    inp.heatHz = w.heat * 80;
+    inp.ocellarHz = strobe ? 60 : 0;
+    inp.pheromoneHz = q(Math.min(30, neighbors * 6) + w.pheromoneStorm * 40 + this.trailSmell * 30, 10);
+    // Complexo Central: erro de rumo → PFL3 (o lado contralateral ativa DNa02)
+    inp.pfl3RightHz = err > 0.05 ? q(Math.min(80, 70 * err), 10) : 0;
+    inp.pfl3LeftHz = err < -0.05 ? q(Math.min(80, -70 * err), 10) : 0;
+    inp.efferencePool = this.committed;
+    const hm = this.homeo;
+    inp.dh44Hz = q(40 * hm.hunger);
+    inp.ipcHz = q(30 * (1 - hm.hunger));
+    inp.itpHz = q(40 * hm.thirst);
+    inp.dfbHz = q(40 * hm.fatigue);
+    inp.dh31Hz = q(40 * hm.bladder);
+    inp.learning = true;
+    ext.request(inp, Math.max(1, Math.round(dt * 1000)));
+
+    // 2) Arbitragem homeostática + plano + decisão (lida dos MBONs reais)
+    this.arbitrate(w, sugarContact);
+    this.plan(w, room);
+
+    // 3) Cinemática e homeostase
+    this.move(dt, w, err, d);
+    this.updateHomeostasis(dt, sugarContact, waterContact, room);
+    this.airPuffTimer = Math.max(0, this.airPuffTimer - dt);
+    this.strobeTimer = Math.max(0, this.strobeTimer - dt);
+    if (w.context === "class") {
+      this.classTicks++;
+      if (this.mode === "attend") this.attendTicks++;
+    }
+  }
+
+  /** Seleção de programa motor para moscas FlyWire (modelo de utilidade homeostática, fora do conectoma). */
+  private arbitrate(w: WorldView, sugarContact: number) {
+    const h = this.homeo;
+    const ctx = w.context;
+    const lesson = ctx === "class" || ctx === "entry" || ctx === "exam";
+    const recess = ctx === "recess" || ctx === "dismissal";
+    const startle = this.airPuffTimer > 0 || this.strobeTimer > 0 ? 0.5 : 0;
+    const score: Record<ActionMode, number> = {
+      attend:
+        (lesson ? 1 : 0.15) +
+        0.25 * (this.personality.focus - 1) -
+        1.3 * Math.max(0, h.hunger - 0.55) -
+        Math.max(0, h.fatigue - 0.6) -
+        1.4 * Math.max(0, h.bladder - 0.6) -
+        0.8 * Math.max(0, h.thirst - 0.6) +
+        startle,
+      forage: 1.6 * Math.max(0, h.hunger - 0.45) + (recess ? 0.35 : 0) + sugarContact * 0.2 - startle * 2,
+      drink: 1.6 * Math.max(0, h.thirst - 0.45) + (recess ? 0.3 : 0),
+      rest: 1.6 * Math.max(0, h.fatigue - 0.5) + w.heat * 0.4 + (recess ? 0.1 : 0),
+      relief: 1.9 * Math.max(0, h.bladder - 0.5),
+      social: (recess ? 0.55 * this.personality.sociability : 0) - (lesson ? 1 : 0) - startle * 2,
+    };
+    let best: ActionMode = this.mode;
+    for (const m of ACTION_NAMES) if (score[m] > score[best]) best = m;
+    if (best !== this.mode && w.time - this.modeSince > 1 && score[best] > score[this.mode] + 0.1) {
+      this.mode = best;
+      this.modeSince = w.time;
+      this.wanderTarget = null;
+    }
+  }
+
   private selectAction(w: WorldView) {
     const r = this.brain.rate;
     let best = 0;
@@ -287,6 +421,7 @@ export class FlyAgent {
       this.trialId = w.trialId;
       this.trialStart = w.time;
       this.evidence.fill(0);
+      this.poolDecoder.reset();
       this.committed = -1;
       this.locked = -1;
       this.lockTime = -1;
@@ -384,6 +519,15 @@ export class FlyAgent {
   /** Acumulador de evidência sobre as taxas MBON (drift-diffusion) → comprometimento com uma placa. */
   private decide(w: WorldView) {
     if (this.committed >= 0) return;
+    if (this.external) {
+      const r = this.external.readout;
+      if (!r) return;
+      const guide = w.pheromoneTrail && w.guidePlate >= 0 && this.trailSmell > 0 ? w.guidePlate : -1;
+      const choice = this.poolDecoder.accumulate(r.pools, (w.time - this.trialStart) * 1000, (j) => (j === guide ? 0.08 : 0));
+      for (let j = 0; j < N_MBON; j++) this.evidence[j] = this.poolDecoder.evidence[j];
+      if (choice >= 0) this.committed = choice;
+      return;
+    }
     const r = this.brain.mbonRates(this.mbonBuf);
     let mean = 0;
     let total = 0;
@@ -423,25 +567,35 @@ export class FlyAgent {
   private move(dt: number, w: WorldView, err: number, d: number) {
     const r = this.brain.rate;
     const teacher = this.role === "teacher";
+    const ext = this.external?.readout ?? null;
 
-    // Giro: PFL3/DNa02 (esquerda aumenta o rumo, direita diminui)
-    let omega = (r[IDX.CX_NAV_L] - r[IDX.CX_NAV_R]) * 0.07 + (r[IDX.DN_TURN_L] - r[IDX.DN_TURN_R]) * 0.03;
+    // Giro: PFL3→DNa02 (reduzido: CX_NAV/DN_TURN; FlyWire: DNa02 esquerdo − direito)
+    let omega = ext
+      ? (ext.rates.dna02_left - ext.rates.dna02_right) * 0.05
+      : (r[IDX.CX_NAV_L] - r[IDX.CX_NAV_R]) * 0.07 + (r[IDX.DN_TURN_L] - r[IDX.DN_TURN_R]) * 0.03;
     // Ganho proporcional do erro de rumo cresce com a velocidade (estabilização optomotora em voo)
-    omega += err * (1.5 + this.speed * 0.9);
+    omega += err * (ext ? 0.8 + this.speed * 0.9 : 1.5 + this.speed * 0.9);
     if (teacher || d < 1.5) omega = omega * 0.3 + err * 5; // reflexo de alinhamento fino
     omega = Math.max(-10, Math.min(10, omega));
     this.heading = wrapAngle(this.heading + omega * dt);
 
     // Voo curto
-    if (!this.flying && r[IDX.DN_FLIGHT] > 18 && d > 6) this.flying = true;
-    if (this.flying && (r[IDX.DN_LAND] > 18 || d < 1.2)) this.flying = false;
+    if (this.external) {
+      // voo voluntário para alvos distantes; decolagem de fuga pela Giant Fiber (DNp01)
+      if (!this.flying && (d > 9 || (ext?.rates.giant_fiber ?? 0) > 10)) this.flying = true;
+      if (this.flying && d < 2.5) this.flying = false;
+    } else {
+      if (!this.flying && r[IDX.DN_FLIGHT] > 18 && d > 6) this.flying = true;
+      if (this.flying && (r[IDX.DN_LAND] > 18 || d < 1.2)) this.flying = false;
+    }
 
     const fatigueSlow = 1 - 0.5 * this.homeo.fatigue;
     let v: number;
     if (teacher) v = d > 0.3 ? Math.min(3.2, d * 2) : 0;
     else if (this.flying) v = 8 * fatigueSlow;
+    else if (this.external) v = (d > 0.35 ? 3.4 : 0) * fatigueSlow;
     else v = 3.4 * Math.min(1.2, r[IDX.DN_WALK] / 40) * fatigueSlow;
-    if (!teacher && r[IDX.DN_PROBOSCIS] > 12 && (this.feeding || this.drinking)) v *= 0.1;
+    if (!teacher && this.proboscisActive(12) && (this.feeding || this.drinking)) v *= 0.1;
     // desacelera quando o alvo está atrás; aproximação final proporcional
     v *= Math.max(0.15, Math.cos(err) * 0.5 + 0.5);
     if (d < 1.2) v = Math.min(v, d * 2.2);
@@ -476,14 +630,13 @@ export class FlyAgent {
     // Animação
     this.legPhase += this.speed * dt * 9;
     this.wingPhase += dt * (this.flying ? 90 : 0);
-    const prob = r[IDX.DN_PROBOSCIS] > 10 ? 1 : 0;
+    const prob = this.proboscisActive(10) ? 1 : 0;
     this.proboscis += (prob - this.proboscis) * Math.min(1, dt * 6);
   }
 
   private updateHomeostasis(dt: number, sugarContact: number, waterContact: number, room: RoomId) {
     const h = this.homeo;
     const p = this.personality;
-    const r = this.brain.rate;
     const activity = 1 + this.speed / 5 + (this.flying ? 1 : 0);
     if (this.role === "teacher") {
       h.hunger = h.thirst = h.bladder = 0.1;
@@ -495,8 +648,10 @@ export class FlyAgent {
     h.fatigue += ((0.00017 + this.speed * 0.00008 + (this.flying ? 0.0004 : 0)) / p.stamina) * dt;
     h.bladder += 0.00015 * dt;
 
-    this.feeding = sugarContact > 0 && r[IDX.DN_PROBOSCIS] > 6 && h.hunger > 0.02;
-    this.drinking = waterContact > 0 && r[IDX.DN_PROBOSCIS] > 6 && h.thirst > 0.02;
+    // sem leitura ainda (cérebro FlyWire carregando), a extensão da probóscide é reflexa ao contato
+    const prob = this.external && !this.external.readout ? true : this.proboscisActive(6);
+    this.feeding = sugarContact > 0 && prob && h.hunger > 0.02;
+    this.drinking = waterContact > 0 && prob && h.thirst > 0.02;
     if (this.feeding) {
       const eat = (room === "classroom" ? 0.05 : 0.14) * dt;
       h.hunger -= eat;
