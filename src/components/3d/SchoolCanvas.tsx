@@ -22,12 +22,9 @@ function CameraRig() {
   const selectedId = useSimStore((s) => s.selectedFlyId);
   const { camera } = useThree();
   const focusUntil = useRef(0);
-  const last = useRef(new THREE.Vector3());
 
   useEffect(() => {
     focusUntil.current = performance.now() + 1400;
-    const f = getEngine().flyById(selectedId);
-    if (f) last.current.set(f.x, f.y, f.z);
   }, [selectedId]);
 
   useFrame(() => {

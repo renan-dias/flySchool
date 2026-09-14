@@ -190,7 +190,7 @@ function FlyAgentViewImpl({ fly }: { fly: FlyAgent }) {
       </group>
 
       {(selected || teacher) && (
-        <Html position={[0, teacher ? 1.9 : 1.5, 0]} center distanceFactor={undefined} zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
+        <Html position={[0, teacher ? 1.9 : 1.5, 0]} center distanceFactor={undefined} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
           <div className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-lg ${selected ? "bg-teal-300 text-slate-900" : "bg-slate-900/80 text-slate-100"}`}>
             {teacher ? "👩‍🏫 " : `${MODE_META[fly.mode].icon} `}
             {fly.name}
