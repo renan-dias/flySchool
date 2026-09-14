@@ -7,7 +7,11 @@ import { SimulationEngine } from "@/core/SimulationEngine";
 
 let engine: SimulationEngine | null = null;
 export function getEngine(): SimulationEngine {
-  if (!engine) engine = new SimulationEngine(20260914, 18);
+  if (!engine) {
+    engine = new SimulationEngine(20260914, 18);
+    // Acesso para pesquisadores via console do navegador: window.flyschool
+    if (typeof window !== "undefined") (window as unknown as { flyschool: SimulationEngine }).flyschool = engine;
+  }
   return engine;
 }
 

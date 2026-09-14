@@ -78,7 +78,7 @@ export default function SchoolCanvas() {
   const select = useSimStore((s) => s.select);
   return (
     <Canvas
-      shadows
+      shadows="percentage"
       orthographic
       dpr={[1, 2]}
       camera={{ position: [48, 46, 58], zoom: 15, near: -200, far: 400 }}

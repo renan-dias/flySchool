@@ -60,7 +60,7 @@ function Graph({ fly }: { fly: FlyAgent }) {
   const brain = fly.brain;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodes = useGraphLayout(brain);
-  const view = useRef({ x: 0, y: 0, k: 0.72 });
+  const view = useRef({ x: 0, y: 0, k: 0.62 });
   const drag = useRef<{ node: number; px: number; py: number; pan: boolean } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const hoverRef = useRef<number | null>(null);
@@ -73,15 +73,7 @@ function Graph({ fly }: { fly: FlyAgent }) {
     let alpha = 1;
     const springEdges = brain.edges.filter((e) => e.plastic < 0 && Math.abs(brain.edgeWeight(e)) > 0.25);
 
-    const frame = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const W = canvas.clientWidth;
-      const H = canvas.clientHeight;
-      if (canvas.width !== W * dpr) {
-        canvas.width = W * dpr;
-        canvas.height = H * dpr;
-      }
-      // ── física ──
+    const physics = () => {
       alpha = Math.max(0.04, alpha * 0.995);
       const n = nodes.length;
       for (let i = 0; i < n; i++) {
@@ -120,13 +112,26 @@ function Graph({ fly }: { fly: FlyAgent }) {
       for (let i = 0; i < n; i++) {
         const a = nodes[i];
         if (drag.current && drag.current.node === i) continue;
-        a.vx += (a.ax - a.x) * 0.012 * (0.4 + alpha);
-        a.vy += (a.ay - a.y) * 0.012 * (0.4 + alpha);
-        a.vx *= 0.82;
-        a.vy *= 0.82;
+        a.vx += (a.ax - a.x) * 0.03 * (0.4 + alpha);
+        a.vy += (a.ay - a.y) * 0.03 * (0.4 + alpha);
+        a.vx *= 0.8;
+        a.vy *= 0.8;
         a.x += a.vx;
         a.y += a.vy;
       }
+    };
+    // pré-assenta o layout para abrir já organizado
+    for (let it = 0; it < 260; it++) physics();
+
+    const frame = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+        canvas.width = Math.round(W * dpr);
+        canvas.height = Math.round(H * dpr);
+      }
+      physics();
 
       // ── desenho ──
       const v = view.current;
@@ -177,7 +182,7 @@ function Graph({ fly }: { fly: FlyAgent }) {
         ctx.stroke();
       }
 
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < nodes.length; i++) {
         const a = nodes[i];
         const meta = brain.meta[i];
         const rate = brain.rate[i];
@@ -193,7 +198,7 @@ function Graph({ fly }: { fly: FlyAgent }) {
         ctx.fill();
         ctx.globalAlpha = 1;
         ctx.shadowBlur = 0;
-        const showLabel = hv === i || (a.group !== "kc" && a.group !== "visual" && v.k > 0.6);
+        const showLabel = hv === i || ((a.group === "mbon" || a.group === "pam" || a.group === "ppl1" || a.group === "state") && v.k > 0.55) || (a.group !== "kc" && a.group !== "visual" && v.k > 1.15);
         if (showLabel) {
           ctx.font = `${hv === i ? 600 : 500} ${11 / v.k}px Inter, sans-serif`;
           ctx.fillStyle = hv === i ? "#ffffff" : "rgba(203,213,225,0.75)";
@@ -432,8 +437,8 @@ export default function BrainGraphModal() {
           <div className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             <span>Decisão motora · MBON → placas</span>
             <span className="font-mono normal-case text-slate-300">
-              {fly.committed >= 0 ? `escolha: ${PLATE_LETTERS[fly.committed]}` : "avaliando…"}
-              {fly.locked >= 0 ? ` ✔ travada ${fly.lockTime.toFixed(1)}s` : ""}
+              {fly.committed >= 0 ? `escolha: ${PLATE_LETTERS[fly.committed]}` : fly.mode === "attend" ? "sem estímulo / avaliando…" : "fora da tarefa"}
+              {fly.committed >= 0 && fly.locked >= 0 ? ` ✔ travada ${fly.lockTime.toFixed(1)}s` : ""}
             </span>
           </div>
           <div className="flex items-end gap-2">
