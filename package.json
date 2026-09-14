@@ -1,0 +1,34 @@
+{
+  "name": "flyschool-bio-neural-classroom",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FlySchool: Bio-Neural Classroom Simulator — neuroeducação com moscas Drosophila governadas por SNN LIF e STDP modulado por dopamina.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "sim:headless": "npx tsx scripts/headless.ts 3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.5.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
+    "jspdf": "^4.2.1",
+    "next": "^15.5.25",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "recharts": "^3.10.1",
+    "three": "^0.186.0",
+    "zustand": "^5.0.15"
+  }
+}
